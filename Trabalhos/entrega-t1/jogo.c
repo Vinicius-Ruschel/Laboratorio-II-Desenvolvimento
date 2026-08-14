@@ -3,23 +3,28 @@
 #include <stdbool.h>
 #include <time.h>
 
-#define TIROS_INICIAIS 10
+#define TIROS_MAX 10
 #define INIMIGOS_INICIAIS 5
 #define POS_DIA 10
+#define ESC_MAX 3
 #define VAZIO ' '
 
 typedef struct timespec crono_t;
 
 typedef struct {
     bool terminou;
+    bool onda_terminada;
     int pontos;
+    int onda;
     int tiros;
-    int inativos;
-    char ataques[POS_DIA];
+    int escudos;
     int n_pos;
+    char ataques[POS_DIA];
+    int inativos;
     int arma_idx;
     const char *armas;
     int n_armas;
+    double intervalo;
     crono_t crono;
 } estado_t;
 
@@ -75,20 +80,39 @@ char sorteia_tipo(estado_t *est)
     return est->armas[rand() % est->n_armas];
 }
 
+double calcula_intervalo(int onda)
+{
+    double base = 2.0;
+    for (int i = 1; i < onda; i++) {
+        base *= 0.9;
+    }
+    return base;
+}
+
+void inicializa_onda(estado_t *est)
+{
+    est->tiros = TIROS_MAX;
+    est->arma_idx = 0;
+    for (int i = 0; i < est->n_pos; i++) {
+        est->ataques[i] = VAZIO;
+    }
+    est->inativos = INIMIGOS_INICIAIS;
+    est->intervalo = calcula_intervalo(est->onda);
+    est->onda_terminada = false;
+    crono_inicia(&est->crono);
+}
+
 void inicializa_estado(estado_t *est)
 {
     srand((unsigned) time(NULL));
     est->terminou = false;
     est->pontos = 0;
-    est->tiros = TIROS_INICIAIS;
-    est->inativos = INIMIGOS_INICIAIS;
+    est->escudos = ESC_MAX;
+    est->onda = 1;
     est->n_pos = POS_DIA;
-    est->arma_idx = 0;
     est->armas = "0123456789";
     est->n_armas = 10;
-    for (int i = 0; i < est->n_pos; i++) {
-        est->ataques[i] = VAZIO;
-    }
+    inicializa_onda(est);
 }
 
 void inicializa_tela()
@@ -116,6 +140,12 @@ int procura_alvo(estado_t *est, char arma)
     return -1;
 }
 
+int valor_ataque(estado_t *est, int pos)
+{
+    int deslocamento = (est->n_pos - 1) - pos;
+    return 1 + deslocamento;
+}
+
 void atirar(estado_t *est)
 {
     if (est->tiros <= 0) {
@@ -127,8 +157,8 @@ void atirar(estado_t *est)
     if (pos < 0) {
         return;
     }
+    est->pontos += valor_ataque(est, pos);
     est->ataques[pos] = VAZIO;
-    est->pontos++;
 }
 
 void processar_teclado(estado_t *est)
@@ -136,6 +166,7 @@ void processar_teclado(estado_t *est)
     char c = lechar();
     if (c == 27) {
         est->terminou = true;
+        est->onda_terminada = true;
     } else if (c == 9) {
         trocar_arma(est);
     } else if (c == 13 || c == 10) {
@@ -153,10 +184,20 @@ bool tem_ataque_ativo(estado_t *est)
     return false;
 }
 
+void colide_saida(estado_t *est)
+{
+    if (est->escudos > 0) {
+        est->escudos--;
+    } else {
+        est->terminou = true;
+        est->onda_terminada = true;
+    }
+}
+
 void mover_ataques(estado_t *est)
 {
     if (est->ataques[0] != VAZIO) {
-        est->terminou = true;
+        colide_saida(est);
     }
     for (int i = 0; i < est->n_pos - 1; i++) {
         est->ataques[i] = est->ataques[i + 1];
@@ -181,7 +222,7 @@ bool onda_completa(estado_t *est)
 
 void processar_tempo(estado_t *est)
 {
-    if (crono_parcial(&est->crono) < 1.0) {
+    if (crono_parcial(&est->crono) < est->intervalo) {
         return;
     }
     crono_inicia(&est->crono);
@@ -191,12 +232,18 @@ void processar_tempo(estado_t *est)
     if (est->inativos > 0) {
         gerar_novo_ataque(est);
     }
+    if (onda_completa(est)) {
+        est->onda_terminada = true;
+    }
 }
 
 void apresenta(estado_t *est)
 {
     printf(" %d %d %c ", est->pontos, est->tiros,
            est->armas[est->arma_idx]);
+    for (int i = 0; i < est->escudos; i++) {
+        putchar(')');
+    }
     for (int i = 0; i < est->n_pos; i++) {
         putchar(est->ataques[i]);
     }
@@ -204,13 +251,39 @@ void apresenta(estado_t *est)
     fflush(stdout);
 }
 
+void aguarda_tecla(estado_t *est, char alvo)
+{
+    char c = 0;
+    while (c != alvo) {
+        c = lechar();
+        if (c == 27) {
+            est->terminou = true;
+            return;
+        }
+    }
+}
+
+void finaliza_onda(estado_t *est)
+{
+    est->pontos += est->tiros * 2;
+    est->pontos += est->escudos * 10;
+    printf("\r\nfim da onda %d! pontos: %d\r\n", est->onda,
+           est->pontos);
+    printf("digite 'r' pra continuar\r\n");
+    aguarda_tecla(est, 'r');
+}
+
 void joga_onda(estado_t *est)
 {
-    crono_inicia(&est->crono);
-    while (!onda_completa(est) && !est->terminou) {
+    inicializa_onda(est);
+    while (!est->onda_terminada) {
         processar_teclado(est);
         processar_tempo(est);
         apresenta(est);
+    }
+    if (!est->terminou) {
+        finaliza_onda(est);
+        est->onda++;
     }
 }
 
@@ -218,8 +291,8 @@ void joga_partida(estado_t *est)
 {
     while (!est->terminou) {
         joga_onda(est);
-        est->terminou = true;
     }
+    printf("\r\nfim do jogo. pontuacao final: %d\r\n", est->pontos);
 }
 
 int main()
