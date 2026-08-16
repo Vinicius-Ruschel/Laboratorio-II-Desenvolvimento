@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 199309L
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -36,6 +37,50 @@ typedef struct {
     int recordes[3];
     crono_t crono;
 } estado_t;
+
+void configura_terminal();
+void normaliza_terminal();
+char lechar();
+void crono_inicia(crono_t *c);
+double crono_parcial(crono_t *c);
+void toca_som(const char *arquivo);
+void nome_som(char tipo, char *nome, size_t tam);
+void toca_som_ataque(char tipo);
+void acrescenta_som(char *cmd, char tipo);
+char sorteia_tipo(estado_t *est);
+double calcula_intervalo(int onda, bool noturno);
+bool decide_noturno(int onda);
+void carrega_recordes(int recordes[3]);
+void salva_recordes(int recordes[3]);
+bool atualiza_recordes(int recordes[3], int pontos);
+void mostra_recordes(estado_t *est);
+void inicializa_estado(estado_t *est);
+void reinicia_partida(estado_t *est);
+void configura_armas(estado_t *est);
+void inicializa_onda(estado_t *est);
+void inicializa_tela();
+void desinicializa_tela();
+void processar_teclado(estado_t *est);
+void trocar_arma(estado_t *est);
+int valor_ataque(estado_t *est, int pos, char tipo);
+int procura_alvo(estado_t *est, char arma);
+void processar_acerto(estado_t *est, int pos, char arma);
+void atirar(estado_t *est);
+void ativar_sonar(estado_t *est);
+bool tem_ataque_ativo(estado_t *est);
+void colide_saida(estado_t *est);
+void mover_ataques(estado_t *est);
+void gerar_novo_ataque(estado_t *est);
+bool onda_completa(estado_t *est);
+void processar_tempo(estado_t *est);
+void apresenta_dia(estado_t *est);
+void apresenta(estado_t *est);
+void aguarda_tecla(estado_t *est, char alvo);
+void finaliza_onda(estado_t *est);
+void perguntar_jogar_de_novo(estado_t *est);
+void finaliza_partida(estado_t *est);
+void joga_onda(estado_t *est);
+void joga_partida(estado_t *est);
 
 // configura o terminal para o modo "cru", para permitir a leitura
 //   de cada caractere digitado sem esperar pelo "enter".
@@ -77,7 +122,7 @@ void crono_inicia(crono_t *c)
     clock_gettime(CLOCK_MONOTONIC, c);
 }
 
-// retorna o tempo passado desde que o cronômetro *c foi iniciado, em segundos
+// retorna o tempo desde que o cronômetro foi iniciado, em segundos
 double crono_parcial(crono_t *c)
 {
     crono_t agora;
@@ -90,7 +135,7 @@ double crono_parcial(crono_t *c)
 // pede ao sistema para tocar um arquivo de som, sem bloquear o programa.
 void toca_som(const char *arquivo)
 {
-    char comando[128];
+    char comando[160];
     snprintf(comando, sizeof(comando), "aplay -q %s &", arquivo);
     system(comando);
 }
@@ -219,6 +264,14 @@ void mostra_recordes(estado_t *est)
            est->recordes[1], est->recordes[2]);
 }
 
+// inicializa o estado para uma nova partida (pontos, ondas, recordes)
+void inicializa_estado(estado_t *est)
+{
+    srand((unsigned) time(NULL));
+    carrega_recordes(est->recordes);
+    reinicia_partida(est);
+}
+
 // reinicia os campos de uma partida, mantendo os recordes carregados
 void reinicia_partida(estado_t *est)
 {
@@ -226,14 +279,6 @@ void reinicia_partida(estado_t *est)
     est->pontos = 0;
     est->escudos = ESC_MAX;
     est->onda = 1;
-}
-
-// inicializa o estado para uma nova partida (pontos, ondas, recordes)
-void inicializa_estado(estado_t *est)
-{
-    srand((unsigned) time(NULL));
-    carrega_recordes(est->recordes);
-    reinicia_partida(est);
 }
 
 // configura armas, posicoes e ataques da onda, conforme dia ou noite
@@ -279,6 +324,22 @@ void inicializa_tela()
 void desinicializa_tela()
 {
     normaliza_terminal();
+}
+
+// le uma tecla e executa o comando correspondente do jogador
+void processar_teclado(estado_t *est)
+{
+    char c = lechar();
+    if (c == 27) {
+        est->terminou = true;
+        est->onda_terminada = true;
+    } else if (c == 9) {
+        trocar_arma(est);
+    } else if (c == 13 || c == 10) {
+        atirar(est);
+    } else if (c == ' ') {
+        ativar_sonar(est);
+    }
 }
 
 // avança a arma selecionada para a proxima da sequencia disponivel
@@ -351,22 +412,6 @@ void ativar_sonar(estado_t *est)
         acrescenta_som(cmd, est->ataques[i]);
     }
     system(cmd);
-}
-
-// le uma tecla e executa o comando correspondente do jogador
-void processar_teclado(estado_t *est)
-{
-    char c = lechar();
-    if (c == 27) {
-        est->terminou = true;
-        est->onda_terminada = true;
-    } else if (c == 9) {
-        trocar_arma(est);
-    } else if (c == 13 || c == 10) {
-        atirar(est);
-    } else if (c == ' ') {
-        ativar_sonar(est);
-    }
 }
 
 // verifica se existe algum ataque ativo (nao vazio) no campo
@@ -442,21 +487,29 @@ void processar_tempo(estado_t *est)
     }
 }
 
+// monta e imprime a linha inteira do status do ataque diurno
+void apresenta_dia(estado_t *est)
+{
+    char linha[64];
+    int p = snprintf(linha, sizeof(linha), " %d %d %c", est->pontos,
+                      est->tiros, est->armas[est->arma_idx]);
+    for (int i = 0; i < est->escudos; i++) {
+        linha[p++] = ')';
+    }
+    for (int i = 0; i < est->n_pos; i++) {
+        linha[p++] = est->ataques[i];
+    }
+    linha[p] = '\0';
+    printf("%s               \r", linha);
+}
+
 // desenha a tela: minimalista à noite, com todo o estado de dia
 void apresenta(estado_t *est)
 {
     if (est->noturno) {
-        printf(" %d   \r", est->pontos);
+        printf(" %d               \r", est->pontos);
     } else {
-        printf(" %d %d %c ", est->pontos, est->tiros,
-               est->armas[est->arma_idx]);
-        for (int i = 0; i < est->escudos; i++) {
-            putchar(')');
-        }
-        for (int i = 0; i < est->n_pos; i++) {
-            putchar(est->ataques[i]);
-        }
-        printf("   \r");
+        apresenta_dia(est);
     }
     fflush(stdout);
 }
@@ -548,4 +601,5 @@ int main()
         joga_partida(&estado);
     }
     desinicializa_tela();
+    return 0;
 }
