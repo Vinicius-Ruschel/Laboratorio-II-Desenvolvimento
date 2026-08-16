@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <string.h>
 #include <time.h>
 
 #define POS_DIA 10
@@ -10,6 +11,7 @@
 #define ATQ_DIA 20
 #define ATQ_NOITE 15
 #define VAZIO ' '
+#define ARQ_RECORDES "recordes.txt"
 #define SONS_DIR "Sons/"
 
 // implementação de um cronômetro
@@ -31,6 +33,7 @@ typedef struct {
     const char *armas;
     int n_armas;
     double intervalo;
+    int recordes[3];
     crono_t crono;
 } estado_t;
 
@@ -116,6 +119,15 @@ void toca_som_ataque(char tipo)
     toca_som(caminho);
 }
 
+// acrescenta a um comando de som em sequencia o som do tipo dado
+void acrescenta_som(char *cmd, char tipo)
+{
+    char nome[16];
+    nome_som(tipo, nome, sizeof(nome));
+    strcat(cmd, " " SONS_DIR);
+    strcat(cmd, nome);
+}
+
 // sorteia um tipo de ataque valido pro periodo atual (dia ou noite)
 char sorteia_tipo(estado_t *est)
 {
@@ -153,14 +165,75 @@ bool decide_noturno(int onda)
     return sorteio >= p;
 }
 
-// inicializa o estado para uma nova partida (pontos, ondas, recordes)
-void inicializa_estado(estado_t *est)
+// carrega os 3 maiores recordes do arquivo, ou zera se ele nao existir
+void carrega_recordes(int recordes[3])
 {
-    srand((unsigned) time(NULL));
+    recordes[0] = recordes[1] = recordes[2] = 0;
+    FILE *f = fopen(ARQ_RECORDES, "r");
+    if (f == NULL) {
+        return;
+    }
+    int lidos = fscanf(f, "%d %d %d", &recordes[0], &recordes[1],
+                        &recordes[2]);
+    if (lidos != 3) {
+        recordes[0] = recordes[1] = recordes[2] = 0;
+    }
+    fclose(f);
+}
+
+// salva os 3 maiores recordes no arquivo
+void salva_recordes(int recordes[3])
+{
+    FILE *f = fopen(ARQ_RECORDES, "w");
+    if (f == NULL) {
+        return;
+    }
+    fprintf(f, "%d %d %d\n", recordes[0], recordes[1], recordes[2]);
+    fclose(f);
+}
+
+// coloca "pontos" entre os recordes, se for maior que algum deles
+bool atualiza_recordes(int recordes[3], int pontos)
+{
+    if (pontos <= recordes[2]) {
+        return false;
+    }
+    recordes[2] = pontos;
+    if (recordes[2] > recordes[1]) {
+        int tmp = recordes[1];
+        recordes[1] = recordes[2];
+        recordes[2] = tmp;
+    }
+    if (recordes[1] > recordes[0]) {
+        int tmp = recordes[0];
+        recordes[0] = recordes[1];
+        recordes[1] = tmp;
+    }
+    return true;
+}
+
+// mostra os tres maiores recordes ja guardados pelo programa
+void mostra_recordes(estado_t *est)
+{
+    printf("recordes: %d, %d, %d\r\n", est->recordes[0],
+           est->recordes[1], est->recordes[2]);
+}
+
+// reinicia os campos de uma partida, mantendo os recordes carregados
+void reinicia_partida(estado_t *est)
+{
     est->terminou = false;
     est->pontos = 0;
     est->escudos = ESC_MAX;
     est->onda = 1;
+}
+
+// inicializa o estado para uma nova partida (pontos, ondas, recordes)
+void inicializa_estado(estado_t *est)
+{
+    srand((unsigned) time(NULL));
+    carrega_recordes(est->recordes);
+    reinicia_partida(est);
 }
 
 // configura armas, posicoes e ataques da onda, conforme dia ou noite
@@ -267,6 +340,19 @@ void atirar(estado_t *est)
     processar_acerto(est, pos, arma);
 }
 
+// emite em sequencia os sons dos escudos e dos ataques ativos
+void ativar_sonar(estado_t *est)
+{
+    char cmd[512] = "aplay -q";
+    for (int i = 0; i < est->escudos; i++) {
+        acrescenta_som(cmd, 'S');
+    }
+    for (int i = 0; i < est->n_pos; i++) {
+        acrescenta_som(cmd, est->ataques[i]);
+    }
+    system(cmd);
+}
+
 // le uma tecla e executa o comando correspondente do jogador
 void processar_teclado(estado_t *est)
 {
@@ -278,6 +364,8 @@ void processar_teclado(estado_t *est)
         trocar_arma(est);
     } else if (c == 13 || c == 10) {
         atirar(est);
+    } else if (c == ' ') {
+        ativar_sonar(est);
     }
 }
 
@@ -398,11 +486,32 @@ void finaliza_onda(estado_t *est)
     aguarda_tecla(est, 'r');
 }
 
+// pergunta se quer jogar de novo, reinicia a partida se sim
+void perguntar_jogar_de_novo(estado_t *est)
+{
+    printf("jogar de novo? (s/n)\r\n");
+    char c = 0;
+    while (c != 's' && c != 'n' && c != 27) {
+        c = lechar();
+    }
+    if (c == 's') {
+        reinicia_partida(est);
+    } else {
+        est->terminou = true;
+    }
+}
+
 // mostra o resumo final da partida, no fim do jogo
 void finaliza_partida(estado_t *est)
 {
     toca_som(SONS_DIR "11.3.wav");
     printf("\r\nfim do jogo. pontuacao final: %d\r\n", est->pontos);
+    if (atualiza_recordes(est->recordes, est->pontos)) {
+        printf("novo recorde!\r\n");
+        salva_recordes(est->recordes);
+    }
+    mostra_recordes(est);
+    perguntar_jogar_de_novo(est);
 }
 
 // executa uma onda de ataques: laço de teclado, tempo e apresentacao
